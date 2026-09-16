@@ -1,0 +1,9 @@
+Package: com.sfhook
+Name: SFHook
+Version: 1.0
+Architecture: iphoneos-arm64
+Description: 顺丰 sytToken 加密入参 Hook（dump CC_MD5/SHA3/AES/PBKDF 输入）
+Maintainer: sf
+Author: sf
+Section: Tweaks
+Depends: mobilesubstrate, firmware (>= 14.0)
