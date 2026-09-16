@@ -343,6 +343,81 @@ static NSString *sf_jsMethodName(RCTModuleMethod *selfObj) {
 }
 %end
 
+// ---------- 核心：SYTTokenManager（iOS 端 sytToken/盐 管理类，与 Android 同名，明文 ObjC） ----------
+%hook SYTTokenManager
+- (NSString *)getToken {
+    NSString *r = %orig;
+    sf_log("[SF] SYTTokenManager.getToken = %@\n", r);
+    sf_alert(@"SYTTokenManager.getToken", r ?: @"(nil)");
+    return r;
+}
+- (NSString *)getSalt {
+    NSString *r = %orig;
+    sf_log("[SF] SYTTokenManager.getSalt = %@\n", r);
+    sf_alert(@"★SYTTokenManager.getSalt（盐！）", r ?: @"(nil)");
+    return r;
+}
+- (NSString *)cachedToken {
+    NSString *r = %orig;
+    sf_log("[SF] cachedToken = %@\n", r);
+    sf_alert(@"cachedToken", r ?: @"(nil)");
+    return r;
+}
+- (NSString *)cachedSalt {
+    NSString *r = %orig;
+    sf_log("[SF] cachedSalt = %@\n", r);
+    sf_alert(@"★cachedSalt（盐缓存）", r ?: @"(nil)");
+    return r;
+}
+- (void)updateToken:(id)t {
+    sf_alert(@"updateToken:", [t description]);
+    %orig(t);
+}
+- (void)updateSalt:(id)s {
+    sf_alert(@"★updateSalt:（新盐）", [s description]);
+    %orig(s);
+}
+- (void)updateToken:(id)t andSalt:(id)s {
+    NSString *msg = [NSString stringWithFormat:@"token=%@\nsalt=%@", [t description], [s description]];
+    sf_alert(@"★updateToken:andSalt:", msg.length > 500 ? [msg substringToIndex:500] : msg);
+    %orig(t, s);
+}
+- (void)saveToken:(id)t {
+    sf_alert(@"saveToken:", [t description]);
+    %orig(t);
+}
+- (void)saveSalt:(id)s {
+    sf_alert(@"★saveSalt:（盐）", [s description]);
+    %orig(s);
+}
+%end
+
+// ---------- SYTCryptoAES（盐/token 的 AES 加解密，入参出参一起抓） ----------
+%hook SYTCryptoAES
++ (id)encryptAES:(id)arg {
+    id r = %orig(arg);
+    NSString *msg = [NSString stringWithFormat:@"入参: %@\n返回: %@", [arg description], [r description]];
+    sf_alert(@"SYTCryptoAES.encryptAES:", msg.length > 600 ? [msg substringToIndex:600] : msg);
+    return r;
+}
++ (id)decryptAES:(id)arg {
+    id r = %orig(arg);
+    NSString *msg = [NSString stringWithFormat:@"入参: %@\n返回: %@", [arg description], [r description]];
+    sf_alert(@"SYTCryptoAES.decryptAES:", msg.length > 600 ? [msg substringToIndex:600] : msg);
+    return r;
+}
+%end
+
+// ---------- SYTHttpRequest（createHeadField 生成请求头，含 sytToken） ----------
+%hook SYTHttpRequest
+- (id)createHeadField {
+    id r = %orig;
+    NSString *d = [r description];
+    sf_alert(@"createHeadField（请求头）", d.length > 700 ? [d substringToIndex:700] : d);
+    return r;
+}
+%end
+
 // ---------- 运行时扫描：列出 App 内可疑的加密类/方法（帮助定位 iOS 类名） ----------
 static void sf_scan_classes(void) {
     NSString *appImage = NSBundle.mainBundle.executablePath;
@@ -463,6 +538,8 @@ static void sf_dump_class_methods(const char *className) {
         sf_dump_class_methods("SYTTokenModel");
         sf_dump_class_methods("SYTCryptoAES");
         sf_dump_class_methods("SYTHttpRequest");
+        sf_dump_class_methods("SYTHttpCXBaseRequest");
+        sf_dump_class_methods("SYTHttpCXRNRequest");
     });
 
     // 5. 启动确认弹窗（延迟 2 秒等 UI 起来，看到它 = 注入/hook 成功）
