@@ -118,6 +118,9 @@ static unsigned char *(*orig_CC_SHA3_256)(const void *, CC_LONG, unsigned char *
 static unsigned char *(*orig_CC_SHA3_384)(const void *, CC_LONG, unsigned char *) = NULL;
 static unsigned char *(*orig_CC_SHA3_512)(const void *, CC_LONG, unsigned char *) = NULL;
 
+// OpenSSL MD5（顺丰 Android so 是静态链接 OpenSSL；iOS 若同样用 OpenSSL 算 sytToken，则 CC_MD5 抓不到）
+static unsigned char *(*orig_OpenSSL_MD5)(const unsigned char *, size_t, unsigned char *) = NULL;
+
 // ---------- 替换实现 ----------
 static unsigned char *my_CC_MD5(const void *data, CC_LONG len, unsigned char *md) {
     sf_dump("CC_MD5", data, len);
@@ -207,6 +210,24 @@ static void my_CCHmac(CCHmacAlgorithm alg, const void *key, size_t keyLen, const
     orig_CCHmac(alg, key, keyLen, data, dataLen, out);
 }
 
+static unsigned char *my_OpenSSL_MD5(const unsigned char *d, size_t n, unsigned char *md) {
+    sf_dump("OpenSSL_MD5", d, n);
+    // 若是 CNsc 开头的 sytToken 串，用 ★ 弹窗
+    if (n > 8 && n < 800) {
+        NSData *dd = [NSData dataWithBytes:d length:n];
+        NSString *s = [[NSString alloc] initWithData:dd encoding:NSUTF8StringEncoding];
+        if (s && ([s hasPrefix:@"CN"] || [s hasPrefix:@"cn"])) {
+            static int syt_shown = 0;
+            if (syt_shown < 10) {
+                syt_shown++;
+                NSString *msg = s.length > 400 ? [[s substringToIndex:400] stringByAppendingString:@"…"] : s;
+                sf_alert([NSString stringWithFormat:@"★sytToken(OpenSSL)输入(len=%zu)", n], msg);
+            }
+        }
+    }
+    return orig_OpenSSL_MD5(d, n, md);
+}
+
 // ---------- RN 模块调用 hook（顺丰是 React Native，能看到 encryptMD5 等方法名+参数） ----------
 // 显式声明为 NSObject 子类，否则 [self ...] 消息因前向声明而编译报错
 @interface RCTModuleMethod : NSObject
@@ -255,6 +276,37 @@ static NSString *sf_jsMethodName(RCTModuleMethod *selfObj) {
         }
     }
     %orig(value, field);
+}
+%end
+
+// ---------- 抓批量设置的头 + 最终发送的请求（多条路径兜底，防止顺丰不走 setValue） ----------
+%hook NSMutableURLRequest
+- (void)setAllHTTPHeaderFields:(NSDictionary *)headerFields {
+    if (headerFields) {
+        for (NSString *k in headerFields) {
+            NSString *lk = [k lowercaseString];
+            if ([lk containsString:@"token"] || [lk containsString:@"sign"] || [lk containsString:@"syt"] || [lk containsString:@"auth"]) {
+                sf_log("[SF] HEADER(batch) %@ = %@\n", k, headerFields[k]);
+                sf_alert([NSString stringWithFormat:@"请求头 %@", k], [headerFields[k] description]);
+            }
+        }
+    }
+    %orig(headerFields);
+}
+%end
+
+%hook NSURLSession
+- (NSURLSessionDataTask *)dataTaskWithRequest:(NSURLRequest *)request completionHandler:(void (^)(NSData *, NSURLResponse *, NSError *))completionHandler {
+    sf_log("[SF] REQ URL: %@\n", request.URL.absoluteString);
+    NSDictionary *h = request.allHTTPHeaderFields;
+    for (NSString *k in h) {
+        NSString *lk = [k lowercaseString];
+        if ([lk containsString:@"token"] || [lk containsString:@"sign"] || [lk containsString:@"syt"] || [lk containsString:@"auth"]) {
+            sf_log("[SF] REQ HEADER %@ = %@\n", k, h[k]);
+            sf_alert([NSString stringWithFormat:@"发送头 %@", k], h[k]);
+        }
+    }
+    return %orig(request, completionHandler);
 }
 %end
 
@@ -324,13 +376,25 @@ static void sf_scan_classes(void) {
 
     sf_log("[SF] CommonCrypto hook 完成，等待触发加密...\n");
 
-    // 3. 扫描可疑类（延迟 1 秒，等类加载）
+    // 3. 尝试 hook OpenSSL MD5（顺丰可能静态/动态链接 OpenSSL，动态符号才有效）
+    orig_OpenSSL_MD5 = (unsigned char *(*)(const unsigned char *, size_t, unsigned char *))dlsym(RTLD_DEFAULT, "MD5");
+    if (orig_OpenSSL_MD5) {
+        struct rebinding rb_ossl[] = {
+            {"MD5", (void *)my_OpenSSL_MD5, (void **)&orig_OpenSSL_MD5},
+        };
+        rebind_symbols(rb_ossl, sizeof(rb_ossl) / sizeof(rb_ossl[0]));
+        sf_log("[SF] OpenSSL MD5 hooked\n");
+    } else {
+        sf_log("[SF] OpenSSL MD5 符号不存在（静态链接或未使用 OpenSSL），跳过\n");
+    }
+
+    // 4. 扫描可疑类（延迟 1 秒，等类加载）
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         sf_scan_classes();
     });
 
-    // 4. 启动确认弹窗（延迟 2 秒等 UI 起来，看到它 = 注入/hook 成功）
+    // 5. 启动确认弹窗（延迟 2 秒等 UI 起来，看到它 = 注入/hook 成功）
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        sf_alert(@"SFHook 已加载", @"注入成功，加密监控已开启。\n\n点几下首页/登录页触发请求，\n看到「CC_MD5 输入」弹窗即说明 hook 生效。");
+        sf_alert(@"SFHook v3 已加载", @"注入成功（含 OpenSSL MD5 hook）。\n\n点几下首页/登录页触发请求，\n重点找「★sytToken」弹窗。");
     });
 }
