@@ -17,6 +17,7 @@
 #import <dlfcn.h>
 #import <objc/runtime.h>
 #import <Foundation/Foundation.h>
+#import <UIKit/UIKit.h>
 
 #import <fcntl.h>
 #import <unistd.h>
@@ -27,21 +28,20 @@
 #import <dispatch/dispatch.h>
 
 // ---------- 日志工具 ----------
-static int sf_fd = -1;
+// 同时写两个位置：
+//   1) App 沙盒 Documents/sf_hook.log  —— 没越狱也能用爱思助手/iMazing 导出（主用）
+//   2) /tmp/sf_hook.log               —— 有 Filza/SSH 的越狱环境直接看
+static int sf_fd_doc = -1;
+static int sf_fd_tmp = -1;
 
 static void sf_open_log(void) {
-    if (sf_fd >= 0) return;
-    // 首选 /tmp（TrollStore 环境可写，Filza/SSH 可看）
-    const char *paths[] = {"/tmp/sf_hook.log", NULL};
-    sf_fd = open(paths[0], O_WRONLY | O_CREAT | O_APPEND, 0644);
-    if (sf_fd < 0) {
-        // 回退到 App Documents
-        NSArray *docs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
-        if (docs.count) {
-            NSString *p = [docs[0] stringByAppendingPathComponent:@"sf_hook.log"];
-            sf_fd = open(p.UTF8String, O_WRONLY | O_CREAT | O_APPEND, 0644);
-        }
+    if (sf_fd_doc >= 0) return;
+    NSArray *docs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
+    if (docs.count) {
+        NSString *p = [docs[0] stringByAppendingPathComponent:@"sf_hook.log"];
+        sf_fd_doc = open(p.UTF8String, O_WRONLY | O_CREAT | O_APPEND, 0644);
     }
+    sf_fd_tmp = open("/tmp/sf_hook.log", O_WRONLY | O_CREAT | O_APPEND, 0644);
 }
 
 static void sf_log(const char *fmt, ...) {
@@ -53,7 +53,8 @@ static void sf_log(const char *fmt, ...) {
     va_end(ap);
     if (n < 0) n = 0;
     if (n >= (int)sizeof(buf)) n = sizeof(buf) - 1;
-    if (sf_fd >= 0) write(sf_fd, buf, n);
+    if (sf_fd_doc >= 0) write(sf_fd_doc, buf, n);
+    if (sf_fd_tmp >= 0) write(sf_fd_tmp, buf, n);
     fprintf(stderr, "%s", buf);  // 同时走 syslog，方便 log stream 看
 }
 
@@ -80,6 +81,27 @@ static void sf_dump(const char *tag, const void *data, size_t len) {
     sf_log("[SF]   str : %s\n", readable.UTF8String);
 }
 
+// ---------- 弹窗显示（没越狱/没任何工具也能在屏幕上看结果） ----------
+static int sf_alert_count = 0;
+
+static void sf_alert(NSString *title, NSString *msg) {
+    if (sf_alert_count >= 12) return;   // 最多弹 12 次，避免刷屏
+    sf_alert_count++;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        UIWindow *win = nil;
+        for (UIWindow *w in UIApplication.sharedApplication.windows) {
+            if (w.isKeyWindow || w.windowLevel == UIWindowLevelNormal) { win = w; break; }
+        }
+        if (!win) return;
+        UIViewController *vc = win.rootViewController;
+        while (vc.presentedViewController) vc = vc.presentedViewController;
+        UIAlertController *alert = [UIAlertController alertControllerWithTitle:title
+            message:msg preferredStyle:UIAlertControllerStyleAlert];
+        [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+        [vc presentViewController:alert animated:YES completion:nil];
+    });
+}
+
 // ---------- 原始函数指针 ----------
 static unsigned char *(*orig_CC_MD5)(const void *, CC_LONG, unsigned char *);
 static unsigned char *(*orig_CC_SHA1)(const void *, CC_LONG, unsigned char *);
@@ -99,6 +121,15 @@ static unsigned char *(*orig_CC_SHA3_512)(const void *, CC_LONG, unsigned char *
 // ---------- 替换实现 ----------
 static unsigned char *my_CC_MD5(const void *data, CC_LONG len, unsigned char *md) {
     sf_dump("CC_MD5", data, len);
+    // 可读文本（sytToken 拼接串是纯文本）就弹窗，直接屏幕上看结果
+    if (len > 16 && len < 600) {
+        NSData *d = [NSData dataWithBytes:data length:len];
+        NSString *s = [[NSString alloc] initWithData:d encoding:NSUTF8StringEncoding];
+        if (s && s.length > 16) {
+            NSString *msg = s.length > 280 ? [[s substringToIndex:280] stringByAppendingString:@"…"] : s;
+            sf_alert([NSString stringWithFormat:@"CC_MD5 输入(len=%d)", (int)len], msg);
+        }
+    }
     return orig_CC_MD5(data, len, md);
 }
 static unsigned char *my_CC_SHA1(const void *data, CC_LONG len, unsigned char *md) {

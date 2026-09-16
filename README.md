@@ -49,6 +49,11 @@ make package
 
 ## 注入顺丰 App（TrollStore）
 
+> 关于 bundle id：`SFHook.plist` 里预填了 `com.sf.activity` / `com.sf-express.activity` / `com.sf-express` 三个候选。
+> **TrollFools 手动注入不依赖这个 plist**（它自己选 App），所以不用担心填错。
+> 只有 ElleKit 的「自动加载」才看这个 plist —— 如果自动加载不生效，说明 bundle id 没匹配上，
+> 用 Filza 或 TrollFools 界面看顺丰的真实 bundle id，改一下 `SFHook.plist` 重新编译即可。
+
 方式 A —— 用 ElleKit（推荐，TrollStore 环境）：
 1. 装 ElleKit（TrollStore 里安装 ElleKit 的 tipa/注入器）
 2. 把 `SFHook.dylib` 通过 ElleKit 注入到「顺丰速运」App
@@ -58,19 +63,22 @@ make package
 2. TrollFools 里选「顺丰速运」→ 添加 dylib → 选 `SFHook.dylib`
 3. 重新打开顺丰 App
 
-## 看日志
+## 看结果（弹窗，最简单，不用任何工具）
+
+dylib 会在 hook 到 MD5 加密输入时**直接在手机屏幕上弹窗显示**，你截图/拍照发我即可。
+
+1. 冷启动顺丰 App，点几下首页/登录页，触发请求
+2. 屏幕上会弹出 **「CC_MD5 输入(len=xxx)」** 的弹窗，内容就是喂给 MD5 的原始字符串（含盐拼接串）
+3. 点 OK 关掉，继续操作，最多弹 12 次
+4. **把弹窗截图发我**，盐和公式就出来了
+
+> 弹窗显示的是「可读文本」；二进制输入（如 AES 密文）不弹窗，只写文件。
+
+## 看文件（备用，需要工具）
 
 日志同时写两个位置：
-- `/tmp/sf_hook.log`（Filza 或 SSH `cat /tmp/sf_hook.log`）
-- App Documents 目录的 `sf_hook.log`
-
-用 Filza 打开 `/tmp/sf_hook.log`，或者：
-```bash
-# SSH 进手机后
-cat /tmp/sf_hook.log
-# 或实时跟踪
-tail -f /tmp/sf_hook.log
-```
+- App 沙盒 `Documents/sf_hook.log`（没越狱可用爱思助手/iMazing 导出）
+- `/tmp/sf_hook.log`（有 Filza/SSH 的环境直接看）
 
 ## 预期输出
 
