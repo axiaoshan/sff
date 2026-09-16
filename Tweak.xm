@@ -18,6 +18,14 @@
 #import <objc/runtime.h>
 #import <Foundation/Foundation.h>
 
+#import <fcntl.h>
+#import <unistd.h>
+#import <stdio.h>
+#import <stdarg.h>
+#import <string.h>
+#import <stdlib.h>
+#import <dispatch/dispatch.h>
+
 // ---------- 日志工具 ----------
 static int sf_fd = -1;
 
@@ -155,9 +163,26 @@ static void my_CCHmac(CCHmacAlgorithm alg, const void *key, size_t keyLen, const
 }
 
 // ---------- RN 模块调用 hook（顺丰是 React Native，能看到 encryptMD5 等方法名+参数） ----------
+// 显式声明为 NSObject 子类，否则 [self ...] 消息因前向声明而编译报错
+@interface RCTModuleMethod : NSObject
+@end
+
+// 用 runtime 读 JS 方法名（ivar 名随 RN 版本变化，多候选兜底）
+static NSString *sf_jsMethodName(RCTModuleMethod *selfObj) {
+    const char *candidates[] = {"_JSMethodName", "JSMethodName", "_methodName", "_jsMethodName", "_selectorName"};
+    for (int i = 0; i < (int)(sizeof(candidates) / sizeof(candidates[0])); i++) {
+        Ivar ivar = class_getInstanceVariable([selfObj class], candidates[i]);
+        if (ivar) {
+            id v = object_getIvar(selfObj, ivar);
+            if (v && [v isKindOfClass:[NSString class]]) return v;
+        }
+    }
+    return nil;
+}
+
 %hook RCTModuleMethod
 - (id)invokeWithBridge:(id)bridge module:(id)module arguments:(NSArray *)arguments {
-    NSString *jsName = [self valueForKey:@"JSMethodName"];   // 私有 ivar，可能拿到方法名
+    NSString *jsName = sf_jsMethodName(self);
     sf_log("[SF] ==== RCTModuleMethod.invoke ====\n");
     sf_log("[SF]   method : %s\n", jsName ? jsName.UTF8String : "(unknown)");
     sf_log("[SF]   module : %s\n", [[module class] description].UTF8String);
