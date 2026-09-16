@@ -349,6 +349,31 @@ static void sf_scan_classes(void) {
     }
 }
 
+// dump 一个类的所有方法名（实例方法 + 类方法），弹窗显示 -> 用于定位 iOS 端 sytToken/盐 的方法
+static void sf_dump_class_methods(const char *className) {
+    Class cls = objc_getClass(className);
+    if (!cls) {
+        sf_log("[SF] 类不存在: %s\n", className);
+        return;
+    }
+    NSMutableString *out = [NSMutableString stringWithString:@"实例方法：\n"];
+    unsigned int mCount = 0;
+    Method *methods = class_copyMethodList(cls, &mCount);
+    for (unsigned int j = 0; j < mCount; j++) {
+        [out appendFormat:@"- %s\n", sel_getName(method_getName(methods[j]))];
+    }
+    if (methods) free(methods);
+    unsigned int cCount = 0;
+    Method *cmethods = class_copyMethodList(object_getClass(cls), &cCount);
+    if (cCount > 0) [out appendString:@"类方法：\n"];
+    for (unsigned int j = 0; j < cCount; j++) {
+        [out appendFormat:@"+ %s\n", sel_getName(method_getName(cmethods[j]))];
+    }
+    if (cmethods) free(cmethods);
+    NSString *show = out.length > 700 ? [out substringToIndex:700] : out;
+    sf_alert([NSString stringWithFormat:@"%s 方法", className], show);
+}
+
 // ---------- 构造函数 ----------
 %ctor {
     sf_open_log();
@@ -398,9 +423,13 @@ static void sf_scan_classes(void) {
         sf_log("[SF] OpenSSL MD5 符号不存在（静态链接或未使用 OpenSSL），跳过\n");
     }
 
-    // 4. 扫描可疑类（延迟 1 秒，等类加载）
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+    // 4. 扫描可疑类 + dump 核心 sytToken 类的方法名（延迟 1.5 秒，等类加载）
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(int64_t)(1.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         sf_scan_classes();
+        sf_dump_class_methods("SYTTokenManager");
+        sf_dump_class_methods("SYTTokenModel");
+        sf_dump_class_methods("SYTCryptoAES");
+        sf_dump_class_methods("SYTHttpRequest");
     });
 
     // 5. 启动确认弹窗（延迟 2 秒等 UI 起来，看到它 = 注入/hook 成功）
