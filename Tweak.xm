@@ -121,16 +121,26 @@ static unsigned char *(*orig_CC_SHA3_512)(const void *, CC_LONG, unsigned char *
 // ---------- 替换实现 ----------
 static unsigned char *my_CC_MD5(const void *data, CC_LONG len, unsigned char *md) {
     sf_dump("CC_MD5", data, len);
-    // 可读文本（sytToken 拼接串是纯文本）就弹窗，直接屏幕上看结果
-    if (len > 16 && len < 600) {
+    if (len > 8 && len < 800) {
         NSData *d = [NSData dataWithBytes:data length:len];
         NSString *s = [[NSString alloc] initWithData:d encoding:NSUTF8StringEncoding];
-        if (s && s.length > 16) {
-            // 过滤明显无关项：深链/推送/图片路径
-            if (![s hasPrefix:@"com.sf-express."] && ![s hasPrefix:@"file://"] &&
-                ![s hasSuffix:@".png"] && ![s hasSuffix:@".jpg"] && ![s hasSuffix:@".webp"]) {
-                NSString *msg = s.length > 280 ? [[s substringToIndex:280] stringByAppendingString:@"…"] : s;
-                sf_alert([NSString stringWithFormat:@"CC_MD5 输入(len=%d)", (int)len], msg);
+        if (s && s.length > 8) {
+            // sytToken 拼接串强特征：以 "CN" 开头（regionCode=CN + languageCode=sc）
+            BOOL isSyt = [s hasPrefix:@"CN"] || [s hasPrefix:@"cn"];
+            if (isSyt) {
+                static int syt_shown = 0;
+                if (syt_shown < 10) {
+                    syt_shown++;
+                    NSString *msg = s.length > 400 ? [[s substringToIndex:400] stringByAppendingString:@"…"] : s;
+                    sf_alert([NSString stringWithFormat:@"★sytToken MD5输入(len=%d)", (int)len], msg);
+                }
+            } else {
+                // 其他 MD5：过滤明显无关项后走配额弹窗
+                if (![s hasPrefix:@"com.sf-express."] && ![s hasPrefix:@"file://"] &&
+                    ![s hasSuffix:@".png"] && ![s hasSuffix:@".jpg"] && ![s hasSuffix:@".webp"]) {
+                    NSString *msg = s.length > 280 ? [[s substringToIndex:280] stringByAppendingString:@"…"] : s;
+                    sf_alert([NSString stringWithFormat:@"CC_MD5 输入(len=%d)", (int)len], msg);
+                }
             }
         }
     }
