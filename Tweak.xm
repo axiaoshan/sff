@@ -81,25 +81,58 @@ static void sf_dump(const char *tag, const void *data, size_t len) {
     sf_log("[SF]   str : %s\n", readable.UTF8String);
 }
 
-// ---------- 弹窗显示（没越狱/没任何工具也能在屏幕上看结果） ----------
-static int sf_alert_count = 0;
+// ---------- 弹窗显示（队列串行防丢失 + 去重 + 线程安全） ----------
+static NSMutableArray<NSDictionary *> *sf_alert_queue = nil;
+static NSMutableSet<NSString *> *sf_alert_seen = nil;
+static BOOL sf_alert_busy = NO;
+
+static void sf_show_next_alert(void) {
+    if (sf_alert_busy) return;
+    NSDictionary *item = nil;
+    @synchronized (sf_alert_queue) {
+        if (sf_alert_queue.count == 0) return;
+        item = sf_alert_queue.firstObject;
+        [sf_alert_queue removeObjectAtIndex:0];
+    }
+    sf_alert_busy = YES;
+
+    UIWindow *win = nil;
+    for (UIWindow *w in UIApplication.sharedApplication.windows) {
+        if (w.isKeyWindow || w.windowLevel == UIWindowLevelNormal) { win = w; break; }
+    }
+    if (!win) { sf_alert_busy = NO; return; }
+    UIViewController *vc = win.rootViewController;
+    while (vc.presentedViewController) vc = vc.presentedViewController;
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:item[@"t"]
+        message:item[@"m"] preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+        sf_alert_busy = NO;
+        sf_show_next_alert();
+    }]];
+    [vc presentViewController:alert animated:YES completion:nil];
+}
 
 static void sf_alert(NSString *title, NSString *msg) {
-    if (sf_alert_count >= 60) return;   // 最多弹 60 次
-    sf_alert_count++;
-    dispatch_async(dispatch_get_main_queue(), ^{
-        UIWindow *win = nil;
-        for (UIWindow *w in UIApplication.sharedApplication.windows) {
-            if (w.isKeyWindow || w.windowLevel == UIWindowLevelNormal) { win = w; break; }
+    if (!sf_alert_queue) sf_alert_queue = [NSMutableArray array];
+    if (!sf_alert_seen) sf_alert_seen = [NSMutableSet set];
+    if (!title) title = @"";
+    if (!msg) msg = @"";
+    NSString *key = [NSString stringWithFormat:@"%@|%@", title, msg];
+    BOOL dup = NO;
+    @synchronized (sf_alert_seen) {
+        if ([sf_alert_seen containsObject:key]) dup = YES;
+        else {
+            [sf_alert_seen addObject:key];
+            if (sf_alert_seen.count > 300) [sf_alert_seen removeAllObjects];
         }
-        if (!win) return;
-        UIViewController *vc = win.rootViewController;
-        while (vc.presentedViewController) vc = vc.presentedViewController;
-        UIAlertController *alert = [UIAlertController alertControllerWithTitle:title
-            message:msg preferredStyle:UIAlertControllerStyleAlert];
-        [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
-        [vc presentViewController:alert animated:YES completion:nil];
-    });
+    }
+    if (dup) return;
+    @synchronized (sf_alert_queue) {
+        if (sf_alert_queue.count >= 60) return;   // 队列上限
+        [sf_alert_queue addObject:@{@"t": title, @"m": msg}];
+    }
+    if ([NSThread isMainThread]) sf_show_next_alert();
+    else dispatch_async(dispatch_get_main_queue(), ^{ sf_show_next_alert(); });
 }
 
 // ---------- 原始函数指针 ----------
@@ -323,10 +356,10 @@ static void sf_scan_classes(void) {
         const char *img = class_getImageName(classes[i]);
         if (!img || strcmp(img, appImage.UTF8String) != 0) continue;   // 只关注主 App 镜像
         const char *cname = class_getName(classes[i]);
-        if (strstr(cname, "Key") || strstr(cname, "Encrypt") || strstr(cname, "MD5") ||
-            strstr(cname, "SHA") || strstr(cname, "Salt") || strstr(cname, "Token") ||
-            strstr(cname, "Crypt") || strstr(cname, "Sign") || strstr(cname, "Cipher") ||
-            strstr(cname, "SYT") || strstr(cname, "Syt")) {
+        if (strncmp(cname, "_Tt", 3) == 0) continue;   // 跳过 Swift 混淆名（Lottie 等）
+        if (strncmp(cname, "SYT", 3) == 0 || strncmp(cname, "Syt", 3) == 0 ||
+            strstr(cname, "Encrypt") || strstr(cname, "Crypto") ||
+            strstr(cname, "Cipher") || strstr(cname, "Salt")) {
             sf_log("[SF]   class: %s\n", cname);
             [popup appendFormat:@"%s\n", cname];
             unsigned int mCount = 0;
