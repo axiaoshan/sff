@@ -85,7 +85,7 @@ static void sf_dump(const char *tag, const void *data, size_t len) {
 static int sf_alert_count = 0;
 
 static void sf_alert(NSString *title, NSString *msg) {
-    if (sf_alert_count >= 12) return;   // 最多弹 12 次，避免刷屏
+    if (sf_alert_count >= 40) return;   // 最多弹 40 次（冷启动无关 MD5 较多，放宽配额）
     sf_alert_count++;
     dispatch_async(dispatch_get_main_queue(), ^{
         UIWindow *win = nil;
@@ -126,8 +126,12 @@ static unsigned char *my_CC_MD5(const void *data, CC_LONG len, unsigned char *md
         NSData *d = [NSData dataWithBytes:data length:len];
         NSString *s = [[NSString alloc] initWithData:d encoding:NSUTF8StringEncoding];
         if (s && s.length > 16) {
-            NSString *msg = s.length > 280 ? [[s substringToIndex:280] stringByAppendingString:@"…"] : s;
-            sf_alert([NSString stringWithFormat:@"CC_MD5 输入(len=%d)", (int)len], msg);
+            // 过滤明显无关项：深链/推送/图片路径
+            if (![s hasPrefix:@"com.sf-express."] && ![s hasPrefix:@"file://"] &&
+                ![s hasSuffix:@".png"] && ![s hasSuffix:@".jpg"] && ![s hasSuffix:@".webp"]) {
+                NSString *msg = s.length > 280 ? [[s substringToIndex:280] stringByAppendingString:@"…"] : s;
+                sf_alert([NSString stringWithFormat:@"CC_MD5 输入(len=%d)", (int)len], msg);
+            }
         }
     }
     return orig_CC_MD5(data, len, md);
@@ -296,5 +300,10 @@ static void sf_scan_classes(void) {
     // 3. 扫描可疑类（延迟 1 秒，等类加载）
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         sf_scan_classes();
+    });
+
+    // 4. 启动确认弹窗（延迟 2 秒等 UI 起来，看到它 = 注入/hook 成功）
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        sf_alert(@"SFHook 已加载", @"注入成功，加密监控已开启。\n\n点几下首页/登录页触发请求，\n看到「CC_MD5 输入」弹窗即说明 hook 生效。");
     });
 }
