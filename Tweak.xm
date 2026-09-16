@@ -314,6 +314,7 @@ static NSString *sf_jsMethodName(RCTModuleMethod *selfObj) {
 static void sf_scan_classes(void) {
     NSString *appImage = NSBundle.mainBundle.executablePath;
     sf_log("[SF] ===== 扫描主 App 内的加密相关类/方法 =====\n");
+    NSMutableString *popup = [NSMutableString stringWithString:@"可疑加密类名：\n"];
     int clsCount = objc_getClassList(NULL, 0);
     Class *classes = (Class *)malloc(sizeof(Class) * clsCount);
     objc_getClassList(classes, clsCount);
@@ -324,8 +325,10 @@ static void sf_scan_classes(void) {
         const char *cname = class_getName(classes[i]);
         if (strstr(cname, "Key") || strstr(cname, "Encrypt") || strstr(cname, "MD5") ||
             strstr(cname, "SHA") || strstr(cname, "Salt") || strstr(cname, "Token") ||
-            strstr(cname, "Crypt") || strstr(cname, "Sign") || strstr(cname, "Cipher")) {
+            strstr(cname, "Crypt") || strstr(cname, "Sign") || strstr(cname, "Cipher") ||
+            strstr(cname, "SYT") || strstr(cname, "Syt")) {
             sf_log("[SF]   class: %s\n", cname);
+            [popup appendFormat:@"%s\n", cname];
             unsigned int mCount = 0;
             Method *methods = class_copyMethodList(classes[i], &mCount);
             for (unsigned int j = 0; j < mCount; j++) {
@@ -337,6 +340,13 @@ static void sf_scan_classes(void) {
     }
     free(classes);
     sf_log("[SF] ===== 扫描结束 =====\n");
+    // 弹窗显示可疑类名，帮助定位 iOS 端 sytToken/盐 相关类
+    if (popup.length > 20) {
+        NSString *show = popup.length > 700 ? [popup substringToIndex:700] : popup;
+        sf_alert(@"iOS 加密相关类", show);
+    } else {
+        sf_alert(@"iOS 加密相关类", @"(未在主 App 镜像找到可疑类)");
+    }
 }
 
 // ---------- 构造函数 ----------
