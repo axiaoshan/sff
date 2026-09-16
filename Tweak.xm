@@ -282,14 +282,24 @@ static NSString *sf_jsMethodName(RCTModuleMethod *selfObj) {
 %hook RCTModuleMethod
 - (id)invokeWithBridge:(id)bridge module:(id)module arguments:(NSArray *)arguments {
     NSString *jsName = sf_jsMethodName(self);
-    sf_log("[SF] ==== RCTModuleMethod.invoke ====\n");
-    sf_log("[SF]   method : %s\n", jsName ? jsName.UTF8String : "(unknown)");
-    sf_log("[SF]   module : %s\n", [[module class] description].UTF8String);
+    NSString *moduleName = [[module class] description];
+    sf_log("[SF] ==== RN %@.%@ ====\n", moduleName, jsName ?: @"?");
     if (arguments) {
         for (NSUInteger i = 0; i < arguments.count; i++) {
-            id a = arguments[i];
-            sf_log("[SF]   arg[%lu] : %s\n", (unsigned long)i, [[a description] UTF8String]);
+            sf_log("[SF]   arg[%lu] = %@\n", (unsigned long)i, arguments[i]);
         }
+    }
+    // 弹窗：只弹 syt/token/salt/encrypt/sign/head 相关的 RN 方法
+    NSString *low = [[NSString stringWithFormat:@"%@.%@", moduleName, jsName ?: @""] lowercaseString];
+    if ([low containsString:@"syt"] || [low containsString:@"token"] ||
+        [low containsString:@"salt"] || [low containsString:@"encrypt"] ||
+        [low containsString:@"sign"] || [low containsString:@"head"]) {
+        NSMutableString *msg = [NSMutableString stringWithFormat:@"%@.%@\n", moduleName, jsName ?: @"?"];
+        for (NSUInteger i = 0; i < arguments.count; i++) {
+            NSString *a = [arguments[i] description];
+            [msg appendFormat:@"arg[%lu]=%@\n", (unsigned long)i, a.length > 150 ? [a substringToIndex:150] : a];
+        }
+        sf_alert(@"RN调用(签名相关)", msg.length > 600 ? [msg substringToIndex:600] : msg);
     }
     return %orig(bridge, module, arguments);
 }
