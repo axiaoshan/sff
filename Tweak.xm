@@ -85,7 +85,7 @@ static void sf_dump(const char *tag, const void *data, size_t len) {
 static int sf_alert_count = 0;
 
 static void sf_alert(NSString *title, NSString *msg) {
-    if (sf_alert_count >= 40) return;   // 最多弹 40 次（冷启动无关 MD5 较多，放宽配额）
+    if (sf_alert_count >= 60) return;   // 最多弹 60 次
     sf_alert_count++;
     dispatch_async(dispatch_get_main_queue(), ^{
         UIWindow *win = nil;
@@ -228,6 +228,23 @@ static NSString *sf_jsMethodName(RCTModuleMethod *selfObj) {
         }
     }
     return %orig(bridge, module, arguments);
+}
+%end
+
+// ---------- 抓请求头：直接看 sytToken / sign / token 头的值（最精准） ----------
+%hook NSMutableURLRequest
+- (void)setValue:(NSString *)value forHTTPHeaderField:(NSString *)field {
+    if (value && value.length && field) {
+        NSString *lf = [field lowercaseString];
+        if ([lf containsString:@"token"] || [lf containsString:@"sign"] ||
+            [lf containsString:@"syt"] || [lf containsString:@"auth"] ||
+            [lf containsString:@"digest"] || [lf containsString:@"key"]) {
+            sf_log("[SF] HEADER %@ = %@\n", field, value);
+            NSString *v = value.length > 280 ? [value substringToIndex:280] : value;
+            sf_alert([NSString stringWithFormat:@"请求头 %@", field], v);
+        }
+    }
+    %orig(value, field);
 }
 %end
 
